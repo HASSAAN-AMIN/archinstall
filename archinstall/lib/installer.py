@@ -48,6 +48,7 @@ from archinstall.lib.models.device import (
 from archinstall.lib.models.locale import LocaleConfiguration
 from archinstall.lib.models.mirrors import MirrorConfiguration
 from archinstall.lib.models.network import Nic
+from archinstall.lib.models.package_types import DEFAULT_KERNEL, Kernel
 from archinstall.lib.models.packages import Repository
 from archinstall.lib.models.pacman import PacmanConfiguration
 from archinstall.lib.models.users import User
@@ -60,7 +61,12 @@ from archinstall.lib.plugins import plugins
 from archinstall.lib.translationhandler import tr
 
 # Any package that the Installer() is responsible for (optional and the default ones)
-__packages__ = ['base', 'sudo', 'linux-firmware', 'linux', 'linux-lts', 'linux-zen', 'linux-hardened']
+# https://github.com/archlinux/archinstall/issues/4368
+# mkinitcpio is listed explicitly so pacstrap installs it deterministically. Otherwise
+# pacman picks the first initramfs provider from the host's pacman.conf, which on non-Arch
+# hosts (EndeavourOS prefers dracut, etc.) breaks the installer's mkinitcpio() and
+# _config_uki() methods that assume mkinitcpio is present in the chroot.
+__packages__ = ['base', 'sudo', 'linux-firmware', 'mkinitcpio'] + [k.value for k in Kernel]
 
 # Additional packages that are installed if the user is running the Live ISO with accessibility tools enabled
 __accessibility_packages__ = ['brltty', 'espeakup', 'alsa-utils']
@@ -79,8 +85,8 @@ class Installer:
 		`Installer()` is the wrapper for most basic installation steps.
 		It also wraps :py:func:`~archinstall.Installer.pacstrap` among other things.
 		"""
-		self._base_packages = base_packages or __packages__[:3]
-		self.kernels = kernels or ['linux']
+		self._base_packages = base_packages or __packages__[:4]
+		self.kernels = kernels or [DEFAULT_KERNEL.value]
 		self._disk_config = disk_config
 
 		self._disk_encryption = disk_config.disk_encryption or DiskEncryption(EncryptionType.NO_ENCRYPTION)
@@ -183,10 +189,10 @@ class Installer:
 		if not skip_ntp:
 			info(tr('Waiting for time sync (timedatectl show) to complete.'))
 
-			started_wait = time.time()
+			started_wait = time.monotonic()
 			notified = False
 			while True:
-				if not notified and time.time() - started_wait > 5:
+				if not notified and time.monotonic() - started_wait > 5:
 					notified = True
 					warn(tr('Time synchronization not completing, while you wait - check the docs for workarounds: https://archinstall.readthedocs.io/'))
 
@@ -396,7 +402,7 @@ class Installer:
 
 	def _mount_luks_partition(self, part_mod: PartitionModification, luks_handler: Luks2) -> None:
 		if not luks_handler.mapper_dev:
-			return None
+			return
 
 		if part_mod.fs_type == FilesystemType.BTRFS and part_mod.btrfs_subvols:
 			# Only mount BTRFS subvolumes that have mountpoints specified
